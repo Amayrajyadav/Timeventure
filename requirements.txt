@@ -1,3 +1,9 @@
-google.generativeai
 streamlit
-requests
+python-dotenv
+google-generativeai
+huggingface_hub
+gtts
+sentence-transformers
+scikit-learn
+langdetect
+deep-translator

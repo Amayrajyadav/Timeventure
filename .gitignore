@@ -1,4 +1,5 @@
-api_keys.py
+.env
+.gitignore
 Historic-Facts-Generator-AI-Powered-Narratives-for-Tourism.pptx
 __pycache__
 main_2.py
