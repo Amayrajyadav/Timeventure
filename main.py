@@ -1,17 +1,19 @@
 import os
 import streamlit as st
-import google.generativeai as genai
+import re
+import base64
 import requests
 import random
 from dotenv import load_dotenv
 from huggingface_hub import InferenceClient
 from gtts import gTTS
 from io import BytesIO
-from sklearn.metrics.pairwise import cosine_similarity
-from langdetect import detect
+from PIL import Image
 from deep_translator import GoogleTranslator
-import folium
-from streamlit_folium import st_folium
+from langdetect import detect
+
+# Set page config must be first Streamlit command
+st.set_page_config(page_title="Historical Places Explorer", layout="wide", page_icon="🏛️")
 
 # Load environment variables
 load_dotenv()
@@ -19,41 +21,128 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 HF_API_KEY = os.getenv("HF_API_KEY")
 
 if not GEMINI_API_KEY:
-    raise ValueError("⚠️ Gemini API key missing.")
+    st.error("⚠️ Gemini API key missing.")
+    st.stop()
 if not HF_API_KEY:
-    raise ValueError("⚠️ HuggingFace API key missing.")
+    st.error("⚠️ HuggingFace API key missing.")
+    st.stop()
 
 # Configure Gemini
 genai.configure(api_key=GEMINI_API_KEY)
-MODEL_NAME = "gemini-1.5-flash-latest"
+MODEL_NAME = "gemini-1.5-flash"
 
-# Hugging Face client
+# Hugging Face client with proper authentication
 hf_client = InferenceClient(token=HF_API_KEY)
 
-# Coordinates for demo
-coordinates = {
-    "Golconda Fort": (17.3833, 78.4011),
-    "Charminar": (17.3616, 78.4747),
-    "Qutb Shahi Tombs": (17.3949, 78.3949),
-    "Ramoji Film City": (17.2543, 78.6808),
-    "Gateway of India": (18.9218, 72.8347),
-    "Ajanta Caves": (20.5522, 75.7033),
-    "Ellora Caves": (20.0268, 75.1790),
-    "Shaniwar Wada": (18.5196, 73.8553),
-    "Statue of Liberty": (40.6892, -74.0445),
-    "Central Park": (40.7851, -73.9683),
-    "Empire State Building": (40.7484, -73.9857),
-    "Brooklyn Bridge": (40.7061, -73.9969)
+# Historical places data with proper image URLs
+historical_places = {
+    "India": {
+        "Telangana": {
+            "Charminar": "https://upload.wikimedia.org/wikipedia/commons/thumb/7/71/Charminar_Hyderabad_1.jpg/330px-Charminar_Hyderabad_1.jpg",
+            "Golconda Fort": "https://upload.wikimedia.org/wikipedia/commons/thumb/5/56/Golconda_Fort_005.jpg/500px-Golconda_Fort_005.jpg",
+            "Qutb Shahi Tombs": "https://upload.wikimedia.org/wikipedia/commons/thumb/0/08/Qutb_Shahi_Tomb_5.jpg/500px-Qutb_Shahi_Tomb_5.jpg",
+            "Warangal Fort": "https://telanganatourism.gov.in/blog/images/02-08-2019.jpg",
+            "Ramoji Film City": "https://hyderabadtourpackage.in/images/places-to-visit/ramoji-film-city-hyderabad-entryfee-timings-tour-package-header.jpg"
+        },
+        "Maharashtra": {
+            "Gateway of India": "https://upload.wikimedia.org/wikipedia/commons/thumb/3/3a/Mumbai_03-2016_30_Gateway_of_India.jpg/375px-Mumbai_03-2016_30_Gateway_of_India.jpg",
+            "Ajanta Caves": "https://www.pilgrimagetour.in/blog/wp-content/uploads/2024/01/Best-Time-to-Visit-Ajanta-Caves.jpg",
+            "Ellora Caves": "https://s7ap1.scene7.com/is/image/incredibleindia/ellora-caves-chhatrapati-sambhaji-nagar-maharashtra-attr-hero-1?qlt=82&ts=1727010540087",
+            "Shaniwar Wada": "https://www.savaari.com/blog/wp-content/uploads/2022/11/Shaniwaarwada_Pune_11zon.jpg"
+        }
+    },
+    "USA": {
+        "New York": {
+            "Statue of Liberty": "https://www.worldatlas.com/r/w1300/upload/f4/d8/7b/shutterstock-1397031029.jpg",
+            "Central Park": "https://cdn.prod.website-files.com/5e1f39c11dc59668da99fae2/675c308451319ef384636daa_lowresshutterstock_1414639229-p-2000.jpeg",
+            "Empire State Building": "https://www.esbnyc.com/sites/default/files/2025-03/ESB-DarkBlueSky.webp",
+            "Brooklyn Bridge": "https://www.nyctourism.com/_next/image/?url=https://images.ctfassets.net/1aemqu6a6t65/68nkexvLlGiTxvxFvzoELk/68ee51265baad76b8d7f5ae8cd99bf2c/brooklyn-bridge-sunset-julienne-schaer.jpg?fm=webp&w=1200&q=75"
+        }
+    }
 }
+
+# Available TTS languages
+tts_languages = {
+    "Telugu": "te",
+    "Hindi": "hi",
+    "English": "en",
+    "Spanish": "es",
+    "French": "fr",
+    "German": "de",
+    "Japanese": "ja",
+    "Chinese": "zh-CN",
+    "Russian": "ru",
+    "Arabic": "ar",
+    "Portuguese": "pt"
+}
+
+# Custom CSS for styling
+st.markdown("""
+<style>
+    .main {
+        background-color: #f8f9fa;
+    }
+    .stSelectbox, .stTextInput, .stButton>button {
+        border-radius: 8px;
+        border: 1px solid #ced4da;
+    }
+    .stButton>button {
+        background-color: #4a6fa5;
+        color: white;
+        font-weight: bold;
+    }
+    .stButton>button:hover {
+        background-color: #3a5a80;
+        color: white;
+    }
+    .place-card {
+        background-color: white;
+        border-radius: 10px;
+        padding: 20px;
+        margin-bottom: 20px;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    }
+    .section-title {
+        color: #4a6fa5;
+        border-bottom: 2px solid #4a6fa5;
+        padding-bottom: 5px;
+    }
+    .sidebar .sidebar-content {
+        background-color: #e9ecef;
+    }
+    .place-image {
+        border-radius: 8px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+</style>
+""", unsafe_allow_html=True)
+
+def clean_text_for_tts(text):
+    """Remove markdown symbols and special characters from text for TTS"""
+    # Remove markdown headers
+    text = re.sub(r'#+\s*', '', text)
+    # Remove markdown bold/italic
+    text = re.sub(r'\*+', '', text)
+    # Remove markdown links
+    text = re.sub(r'\[([^\]]+)\]\([^\)]+\)', r'\1', text)
+    # Remove other markdown symbols
+    text = text.replace('`', '').replace('~', '')
+    # Remove extra whitespace
+    text = ' '.join(text.split())
+    return text
 
 @st.cache_data(ttl=3600)
 def fetch_place_details(place_name, state, country):
     prompt = f"""
-    Provide details about {place_name} in {state}, {country}:
-    - A short historical narrative (100 words).
-    - Five interesting historical facts.
-    - Traffic info (peak hours, best visit times).
-    - Location details.
+    Provide comprehensive details about {place_name} in {state}, {country}:
+    - A short historical narrative (150-200 words) in point form
+    - Five interesting historical facts
+    - Architectural significance (if applicable) in point form
+    - Best time to visit 
+    - Cultural importance in point form
+    - Any special events or festivals associated in point form
+    
+    Format the response with clear section headings in Markdown.
     """
     try:
         model = genai.GenerativeModel(MODEL_NAME)
@@ -63,47 +152,38 @@ def fetch_place_details(place_name, state, country):
         return f"⚠️ Error retrieving details: {e}"
 
 @st.cache_data(ttl=3600)
-def fetch_wikimedia_image(query):
-    search_url = "https://en.wikipedia.org/w/api.php"
-    search_params = {
-        "action": "opensearch",
-        "search": query,
-        "limit": 1,
-        "namespace": 0,
-        "format": "json"
-    }
-    try:
-        search_resp = requests.get(search_url, params=search_params).json()
-        if not search_resp[1]:
-            return None
-        title = search_resp[1][0]
-        image_params = {
-            "action": "query",
-            "format": "json",
-            "prop": "pageimages",
-            "piprop": "original",
-            "titles": title
-        }
-        image_resp = requests.get(search_url, params=image_params).json()
-        pages = image_resp.get("query", {}).get("pages", {})
-        for page in pages.values():
-            if "original" in page:
-                return page["original"]["source"]
-        return None
-    except Exception:
-        return None
-
-@st.cache_data(ttl=3600)
 def generate_tts_audio(text, lang='en'):
-    tts = gTTS(text=text, lang=lang)
-    audio_bytes = BytesIO()
-    tts.write_to_fp(audio_bytes)
-    audio_bytes.seek(0)
-    return audio_bytes
+    try:
+        cleaned_text = clean_text_for_tts(text)
+        tts = gTTS(text=cleaned_text, lang=lang)
+        audio_bytes = BytesIO()
+        tts.write_to_fp(audio_bytes)
+        audio_bytes.seek(0)
+        return audio_bytes
+    except Exception as e:
+        st.error(f"Error generating audio in {lang}: {e}")
+        try:
+            if lang != 'en':
+                cleaned_text = clean_text_for_tts(text)
+                tts = gTTS(text=cleaned_text, lang='en')
+                audio_bytes = BytesIO()
+                tts.write_to_fp(audio_bytes)
+                audio_bytes.seek(0)
+                return audio_bytes
+        except:
+            pass
+        return None
 
 def analyze_sentiment(text):
-    output = hf_client.text_classification(text, model="cardiffnlp/twitter-roberta-base-sentiment")
-    return output[0]['label']
+    try:
+        output = hf_client.text_classification(
+            text=text, 
+            model="cardiffnlp/twitter-roberta-base-sentiment"
+        )
+        return output[0]['label']
+    except Exception as e:
+        st.error(f"Sentiment analysis error: {e}")
+        return "Neutral"
 
 def translate_text(text, target_lang='hi'):
     try:
@@ -111,7 +191,8 @@ def translate_text(text, target_lang='hi'):
         if detected_lang != target_lang:
             return GoogleTranslator(source='auto', target=target_lang).translate(text)
         return text
-    except Exception:
+    except Exception as e:
+        st.warning(f"Translation error: {e}")
         return text
 
 def summarize_text(text):
@@ -126,28 +207,95 @@ def summarize_text(text):
 
 def caption_image(image_url):
     try:
-        image = requests.get(image_url).content
-        return hf_client.image_to_text(image=image, model="nlpconnect/vit-gpt2-image-captioning")
-    except:
-        return "No caption available."
+        response = requests.get(image_url, stream=True, timeout=10)
+        if response.status_code == 200:
+            image_bytes = BytesIO(response.content)
+            image = Image.open(image_bytes)
+            
+            if image.mode != 'RGB':
+                image = image.convert('RGB')
+            
+            img_byte_arr = BytesIO()
+            image.save(img_byte_arr, format='JPEG', quality=95)
+            img_data = img_byte_arr.getvalue()
+            
+            try:
+                # Try two different approaches for captioning
+                try:
+                    # Method 1: Direct bytes
+                    caption = hf_client.image_to_text(
+                        image=img_data,
+                        model="nlpconnect/vit-gpt2-image-captioning"
+                    )
+                    if caption:
+                        return caption
+                except:
+                    # Method 2: Base64 encoded
+                    base64_image = base64.b64encode(img_data).decode('utf-8')
+                    caption = hf_client.image_to_text(
+                        image=base64_image,
+                        model="Salesforce/blip-image-captioning-base"
+                    )
+                    return caption if caption else "No caption could be generated."
+                
+                return "No caption could be generated for this image."
+            except Exception as e:
+                st.error(f"Caption generation failed: {str(e)}")
+                return "Could not generate caption for this image."
+        else:
+            return f"Failed to load image. Status code: {response.status_code}"
+    except Exception as e:
+        return f"Image processing error: {str(e)}"
 
-def answer_question(context, question):
+def analyze_uploaded_image(image_bytes):
     try:
-        result = hf_client.question_answering(model="deepset/roberta-base-squad2", question=question, context=context)
-        return result['answer']
-    except:
-        return "Sorry, I couldn't find an answer."
+        image = Image.open(image_bytes)
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        response = model.generate_content([
+            "Analyze this historical place image and provide: "
+            "1. Likely name and location of the place "
+            "2. Brief historical background (100 words) in point form "
+            "3. Architectural style and period in point form "
+            "4. Cultural significance in point form "
+            "5. Best time to visit " 
+            "Format your response with clear headings", 
+            image
+        ])
+        return response.text
+    except Exception as e:
+        return f"⚠️ Error analyzing image: {str(e)}"
 
-# Streamlit app
-st.set_page_config(page_title="Historical Places Explorer", layout="wide")
+def verify_image_url(url):
+    try:
+        response = requests.head(url, timeout=5)
+        return response.status_code == 200
+    except:
+        return False
+
+# Main app content
 st.title("🏛️ Historical Places Explorer")
 
-country = st.selectbox("🌍 Select Country", [None, "India", "USA"])
+# Country and state selection
+country = st.selectbox("🌍 Select Country", ["Select a country", "India", "USA"])
 states_dict = {
-    "India": [None, "Telangana", "Maharashtra"],
-    "USA": [None, "New York"]
+    "India": ["Select a state", "Telangana", "Maharashtra"],
+    "USA": ["Select a state", "New York"]
 }
-state = st.selectbox("📍 Select State", states_dict[country] if country else [None])
+
+if country != "Select a country":
+    state = st.selectbox("📍 Select State", states_dict[country])
+
+# TTS language selection
+default_lang_index = 0
+if "selected_tts_language" not in st.session_state:
+    st.session_state.selected_tts_language = "Telugu" if country == "India" and state == "Telangana" else "Telugu"
+
+selected_tts_language_name = st.selectbox(
+    "🗣️ Select Audio Guide Language", 
+    list(tts_languages.keys()),
+    index=default_lang_index
+)
+selected_tts_language_code = tts_languages[selected_tts_language_name]
 
 # Session state to control rendering
 if "explore_clicked" not in st.session_state:
@@ -158,78 +306,143 @@ if "selected_places" not in st.session_state:
 # Buttons to control flow
 col1, col2 = st.columns([1, 1])
 with col1:
-    if st.button("🗺️ Explore Places") and state:
+    if st.button("🗺️ Explore Places") and country != "Select a country" and state != "Select a state":
         st.session_state.explore_clicked = True
         st.session_state.selected_places = random.sample(
-            {
-                "Telangana": ["Golconda Fort", "Charminar", "Qutb Shahi Tombs", "Ramoji Film City"],
-                "Maharashtra": ["Gateway of India", "Ajanta Caves", "Ellora Caves", "Shaniwar Wada"],
-                "New York": ["Statue of Liberty", "Central Park", "Empire State Building", "Brooklyn Bridge"]
-            }.get(state, []), 3
-        )
+            list(historical_places[country][state].keys()), 
+            min(3, len(historical_places[country][state])))
 with col2:
     if st.button("🔄 Reset"):
         st.session_state.explore_clicked = False
         st.session_state.selected_places = []
 
+# Sidebar for image upload
+with st.sidebar:
+    st.header("🔍 Image Analysis")
+    uploaded_file = st.file_uploader("Upload an image of a historical place", type=["jpg", "jpeg", "png", "webp"])
+    
+    if uploaded_file is not None:
+        st.image(uploaded_file, caption="Uploaded Image", use_container_width=True)
+        with st.spinner("Analyzing image..."):
+            analysis_result = analyze_uploaded_image(uploaded_file)
+            st.markdown("### Analysis Results")
+            st.markdown(analysis_result)
+            
+            audio_bytes = generate_tts_audio(analysis_result, selected_tts_language_code)
+            if audio_bytes:
+                st.audio(audio_bytes, format='audio/mp3')
+
 # Main content
-if st.session_state.explore_clicked and state:
+if st.session_state.explore_clicked and country != "Select a country" and state != "Select a state":
     st.subheader(f"🔍 Historical Places in {state}, {country}")
-    m = folium.Map(location=[20.5937, 78.9629], zoom_start=4)
-
+    
     for place in st.session_state.selected_places:
-        st.markdown(f"### 🏰 {place}")
-        image_url = fetch_wikimedia_image(place)
-
-        if image_url:
-            st.image(image_url, width=500)
-            st.write("📸 Caption:", caption_image(image_url))
-        else:
-            st.warning("⚠️ No image found.")
-
-        details = fetch_place_details(place, state, country)
-        st.write(details)
-        st.audio(generate_tts_audio(details), format='audio/mp3')
-        st.markdown("**Hindi Translation:**")
-        st.write(translate_text(details, target_lang='hi'))
-        st.markdown("**🔍 TL;DR:**")
-        st.write(summarize_text(details))
-
-        sample_review = f"I visited {place} and loved it! It's breathtaking."
-        sentiment = analyze_sentiment(sample_review)
-        st.write(f"🧠 Sample Sentiment: {sentiment}")
-
-        st.markdown("**❓ Ask a question about this place:**")
-        question = st.text_input(f"e.g., Who built {place}?", key=place)
-        if question:
-            st.write("💬 Answer:", answer_question(details, question))
-
-        if place in coordinates:
-            lat, lon = coordinates[place]
-            folium.Marker(location=[lat, lon], popup=place).add_to(m)
-
-    st_folium(m, width=700, height=500)
-
+        with st.container():
+            st.markdown(f"<div class='place-card'>", unsafe_allow_html=True)
+            
+            st.markdown(f"### 🏰 {place}")
+            
+            if country in historical_places and state in historical_places[country] and place in historical_places[country][state]:
+                image_url = historical_places[country][state][place]
+                
+                if verify_image_url(image_url):
+                    col1, col2 = st.columns([2, 1])
+                    with col1:
+                        try:
+                            st.image(image_url, use_container_width=True, caption=place)
+                        except Exception as e:
+                            st.error(f"Error displaying image: {e}")
+                            st.markdown(f"**Image URL:** [Link]({image_url})")
+                    with col2:
+                        st.markdown("**📸 Caption:**")
+                        with st.spinner("Generating caption..."):
+                            caption = caption_image(image_url)
+                            st.write(caption)
+                else:
+                    st.warning(f"⚠️ Image for {place} might not be accessible. URL: {image_url}")
+            else:
+                st.warning("⚠️ No image available for this place.")
+            
+            with st.expander("📜 View Details"):
+                details = fetch_place_details(place, state, country)
+                st.markdown(details)
+                
+                st.markdown("---")
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.markdown(f"**🎧 Audio Guide ({selected_tts_language_name})**")
+                    
+                    if selected_tts_language_code != "en":
+                        translated_text = translate_text(details, selected_tts_language_code)
+                        audio_bytes = generate_tts_audio(translated_text, selected_tts_language_code)
+                    else:
+                        audio_bytes = generate_tts_audio(details, selected_tts_language_code)
+                    
+                    if audio_bytes:
+                        st.audio(audio_bytes, format='audio/mp3')
+                    else:
+                        st.warning("⚠️ Audio generation failed")
+                
+                with col2:
+                    if selected_tts_language_code == "te":
+                        translation_language = "Hindi"
+                        translation_code = "hi"
+                    elif selected_tts_language_code == "hi":
+                        translation_language = "Telugu"
+                        translation_code = "te"
+                    else:
+                        translation_language = "Telugu" if country == "India" and state == "Telangana" else "Hindi"
+                        translation_code = "te" if country == "India" and state == "Telangana" else "hi"
+                    
+                    st.markdown(f"**🌐 {translation_language} Translation**")
+                    st.write(translate_text(details, target_lang=translation_code))
+                
+                st.markdown("---")
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.markdown("**🔍 TL;DR**")
+                    st.write(summarize_text(details))
+                with col2:
+                    sample_review = f"I visited {place} and was amazed by its historical significance!"
+                    sentiment = analyze_sentient(sample_review)
+                    st.markdown("**🧠 Sample Sentiment Analysis**")
+                    st.write(f"`{sentiment}`")
+            
+            st.markdown("</div>", unsafe_allow_html=True)
+    
     st.markdown("---")
-    st.markdown("### 💡 Emotion-Based Recommendations")
-    user_feeling = st.text_input("Type how you feel (e.g., 'I want peace' or 'I'm nostalgic')", key="emotion_input")
+    st.markdown("### 💡 Personalized Recommendations")
+    user_feeling = st.text_input("How are you feeling today?", 
+                               key="emotion_input",
+                               placeholder="Describe your mood...")
     if user_feeling:
         emotion = analyze_sentiment(user_feeling)
-        st.write(f"😊 Detected Emotion: {emotion}")
+        st.write(f"😊 Detected Emotion: `{emotion}`")
         rec = random.choice(st.session_state.selected_places)
-        st.write(f"🎯 Based on your mood, you might enjoy visiting: {rec}")
-
+        st.success(f"🎯 Based on your mood, we recommend: **{rec}**")
+    
     st.markdown("---")
-    st.markdown("### 🗣️ Local Language Narration (Hindi)")
+    st.markdown(f"### 🗣️ Local Language Narration ({selected_tts_language_name})")
     if st.session_state.selected_places:
-        hindi_audio = generate_tts_audio(translate_text(details, 'hi'), lang='hi')
-        st.audio(hindi_audio, format='audio/mp3')
-
-    st.markdown("---")
-    st.markdown("### 🤖 Historical Chatbot")
-    user_q = st.text_input("Ask the 16th-century guide something...", key="historical_qa")
-    if user_q:
-        char_prompt = f"You are a 16th-century historian. Answer like an ancient royal guide. Question: {user_q}"
-        chatbot = genai.GenerativeModel(MODEL_NAME)
-        char_response = chatbot.generate_content(char_prompt)
-        st.write(char_response.text)
+        details = fetch_place_details(st.session_state.selected_places[0], state, country)
+        
+        if country == "India" and state == "Telangana" and selected_tts_language_code == "en":
+            st.info("📢 For Telangana locations, try the Telugu audio option!")
+        
+        if selected_tts_language_code != "en":
+            audio_text = translate_text(details, selected_tts_language_code)
+        else:
+            audio_text = details
+        audio_bytes = generate_tts_audio(audio_text, lang=selected_tts_language_code)
+        if audio_bytes:
+            st.audio(audio_bytes, format='audio/mp3')
+        else:
+            st.warning(f"⚠️ Could not generate audio in {selected_tts_language_name}")
+else:
+    st.info("👆 Select a country and state to explore historical places.")
+    try:
+        st.image("logo.jpg", 
+                caption="Explore Historical Places", use_container_width=True)
+    except Exception as e:
+        st.error(f"Error displaying welcome image: {e}")
+        st.markdown("Welcome to the Historical Places Explorer! Select a country and state to begin.")
