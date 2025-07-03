@@ -1,6 +1,6 @@
 MIT License
 
-Copyright (c) 2025 RANGDAL PAVANSAI
+Copyright (c) 2025 ALLADI AMAY RAJ YADAV 
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
